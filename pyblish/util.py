@@ -27,7 +27,7 @@ __all__ = [
 ]
 
 
-def publish(context=None, plugins=None, targets=None):
+def publish(context=None, plugins=None, targets=None, orders=None):
     """Publish everything
 
     This function will process all available plugins of the
@@ -40,6 +40,7 @@ def publish(context=None, plugins=None, targets=None):
         plugins (list, optional): Plug-ins to include,
             defaults to results of discover()
         targets (list, optional): Targets to include for publish session.
+        orders (list, optional): Orders to process (e.g. [CollectorOrder]).
 
     Returns:
         Context: The context processed by the plugins.
@@ -53,13 +54,13 @@ def publish(context=None, plugins=None, targets=None):
 
     context = context if context is not None else api.Context()
 
-    for _ in publish_iter(context, plugins, targets):
+    for _ in publish_iter(context, plugins, targets, orders):
         pass
 
     return context
 
 
-def publish_iter(context=None, plugins=None, targets=None):
+def publish_iter(context=None, plugins=None, targets=None, orders=None):
     """Publish iterator
 
     This function will process all available plugins of the
@@ -72,12 +73,11 @@ def publish_iter(context=None, plugins=None, targets=None):
         plugins (list, optional): Plug-ins to include,
             defaults to results of discover()
         targets (list, optional): Targets to include for publish session.
+        orders (list, optional): Orders to process (e.g. [CollectorOrder]).
 
     Yields:
-        tuple of dict and Context: A tuple is returned with a dictionary and
-            the Context object. The dictionary contains all the result
-            information of a plugin process, and the Context is the Context
-            after the plugin has been processed.
+        dict: A dictionary that contains all the result information of a
+            processed plugin.
 
     Usage:
         >> context = plugin.Context()
@@ -87,64 +87,23 @@ def publish_iter(context=None, plugins=None, targets=None):
                print result
 
     """
-    for result in _convenience_iter(context, plugins, targets):
+    for result in _convenience_iter(context, plugins, targets, orders):
         yield result
 
     api.emit("published", context=context)
 
 
-def _convenience_iter(context=None, plugins=None, targets=None, order=None):
-    # Include "default" target when no targets are requested.
+def _convenience_iter(context=None, plugins=None, targets=None, orders=None):
     targets = targets or ["default"]
+    registered_targets = api.registered_targets()
 
     # Must check against None, as objects be emptys
     context = api.Context() if context is None else context
     plugins = api.discover() if plugins is None else plugins
 
-    if order is not None:
-        plugins = list(
-            Plugin for Plugin in plugins
-            if lib.inrange(Plugin.order, order)
-        )
-
     # Register targets
     for target in targets:
         api.register_target(target)
-
-    # Do not consider inactive plug-ins
-    plugins = list(p for p in plugins if p.active)
-    collectors = list(p for p in plugins if lib.inrange(
-        number=p.order,
-        base=api.CollectorOrder)
-    )
-
-    # Compute an approximation of all future tasks
-    # NOTE: It's an approximation, because tasks are
-    # dynamically determined at run-time by contents of
-    # the context and families of contained instances;
-    # each of which may differ between task.
-    task_count = len(list(logic.Iterator(plugins, context)))
-
-    # First pass, collection
-    tasks_processed_count = 1
-    for Plugin, instance in logic.Iterator(collectors, context):
-        result = plugin.process(Plugin, context, instance)
-
-        # Inject additional member for results here.
-        result["progress"] = float(tasks_processed_count) / task_count
-
-        tasks_processed_count += 1
-        yield result
-
-    # Exclude collectors from further processing
-    plugins = list(p for p in plugins if p not in collectors)
-
-    # Exclude plug-ins that do not have at
-    # least one compatible instance.
-    for Plugin in list(plugins):
-        if Plugin.__instanceEnabled__:
-            if not logic.instances_by_plugin(context, Plugin):
-                plugins.remove(Plugin)
 
     # Mutable state, used in Iterator
     state = {
@@ -152,41 +111,124 @@ def _convenience_iter(context=None, plugins=None, targets=None, order=None):
         "ordersWithError": set()
     }
 
-    # Second pass, the remainder
-    for Plugin, instance in logic.Iterator(plugins, context, state):
-        try:
-            result = plugin.process(Plugin, context, instance)
-            result["progress"] = (
-                float(tasks_processed_count) / task_count
-            )
+    # Do not consider inactive plug-ins
+    plugins = list(plug for plug in plugins if plug.active)
 
-            tasks_processed_count += 1
-        except StopIteration:  # End of items
-            raise
+    # Do not consider plug-ins that are not in any of the given orders
+    if orders:
+        plugins = list(
+            plug for plug in plugins
+            if any(lib.inrange(plug.order, order) for order in orders)
+        )
 
-        except Exception:  # This is unexpected, most likely a bug
-            log.error("An expected exception occurred.\n")
-            raise
+    # Keep track of the progress using the same dictionary instance
+    progress = {
+        "current": 0,
+        "total": len(plugins)
+    }
 
-        else:
-            # Make note of the order at which the
-            # potential error error occured.
-            if result["error"]:
-                state["ordersWithError"].add(Plugin.order)
+    # Process pre-collectors
+    precollectors = list(
+        plug for plug in plugins
+        if plug.order < api.CollectorOrder
+        and not lib.inrange(plug.order, api.CollectorOrder)
+    )
 
-        if isinstance(result, Exception):
-            log.error("An unexpected error happened: %s" % result)
-            break
+    for result in _process_plugins(context, precollectors, state, progress):
+        yield result
+
+    # Process collectors
+    collectors = list(
+        plug for plug in plugins
+        if lib.inrange(plug.order, api.CollectorOrder)
+    )
+
+    if not orders or api.CollectorOrder in orders:
+        for result in _process_plugins(context, collectors, state, progress):
+            yield result
+
+        api.emit("collected", context=context)
+
+    # Process validators
+    validators = list(
+        plug for plug in plugins
+        if lib.inrange(plug.order, api.ValidatorOrder)
+    )
+
+    if not orders or api.ValidatorOrder in orders:
+        for result in _process_plugins(context, validators, state, progress):
+            yield result
+
+        api.emit("validated", context=context)
+
+    # Process extractors
+    extractors = list(
+        plug for plug in plugins
+        if lib.inrange(plug.order, api.ExtractorOrder)
+    )
+
+    if not orders or api.ExtractorOrder in orders:
+        for result in _process_plugins(context, extractors, state, progress):
+            yield result
+
+        api.emit("extracted", context=context)
+
+    # Process integrators
+    integrators = list(
+        plug for plug in plugins
+        if lib.inrange(plug.order, api.IntegratorOrder)
+    )
+
+    if not orders or api.IntegratorOrder in orders:
+        for result in _process_plugins(context, integrators, state, progress):
+            yield result
+
+        api.emit("integrated", context=context)
+
+    # Process post-integrators
+    postintegrators = list(
+        plug for plug in plugins
+        if plug.order > api.IntegratorOrder
+        and not lib.inrange(plug.order, api.IntegratorOrder)
+    )
+
+    for result in _process_plugins(context, postintegrators, state, progress):
+        yield result
+
+    # Deregister targets
+    for target in targets:
+        if target not in registered_targets:
+            api.deregister_target(target)
+
+
+def _process_plugins(context, plugins, state, progress):
+    expected_plugins_count = len(plugins)
+    actual_plugins_count = 0
+    processed_plugins = set()
+
+    for plug, instance in logic.Iterator(plugins, context, state):
+        # Do not consider instances when tracking progress
+        if plug not in processed_plugins:
+            processed_plugins.add(plug)
+            actual_plugins_count += 1
+            progress["current"] += 1
+
+        result = plugin.process(plug, context, instance)
+
+        # Make note of the order at which the error occurred
+        if result["error"]:
+            state["ordersWithError"].add(plug.order)
 
         error = result["error"]
         if error is not None:
             print(error)
 
+        result["progress"] = float(progress["current"]) / progress["total"]
+
         yield result
 
-    # Deregister targets
-    for target in targets:
-        api.deregister_target(target)
+    # If some plugins were skipped, add difference to progress
+    progress["current"] += expected_plugins_count - actual_plugins_count
 
 
 def collect(context=None, plugins=None, targets=None):
@@ -258,41 +300,122 @@ def integrate(context=None, plugins=None, targets=None):
 
 
 def collect_iter(context=None, plugins=None, targets=None):
-    for result in _convenience_iter(context, plugins, targets,
-                                    order=api.CollectorOrder):
-        yield result
+    """ Convenience iterator for collection-only
 
-    api.emit("collected", context=context)
+    This function will process only the collector plug-ins.
+
+    Arguments:
+        context (Context, optional): Context, defaults to
+            creating a new context
+        plugins (list, optional): Plug-ins to include,
+            defaults to results of discover()
+        targets (list, optional): Targets to include for publish session.
+
+    Yields:
+        dict: A dictionary that contains all the result information of a
+            processed plugin.
+
+    Usage:
+        >> context = plugin.Context()
+        >> for result in util.collect_iter(context):
+               print result
+    """
+    for result in _convenience_iter(
+            context, plugins, targets, orders=[api.CollectorOrder]
+    ):
+        yield result
 
 
 def validate_iter(context=None, plugins=None, targets=None):
-    for result in _convenience_iter(context, plugins, targets,
-                                    order=api.ValidatorOrder):
-        yield result
+    """ Convenience iterator for validation-only
 
-    api.emit("validated", context=context)
+    This function will process only the validator plug-ins.
+
+    Arguments:
+        context (Context, optional): Context, defaults to
+            creating a new context
+        plugins (list, optional): Plug-ins to include,
+            defaults to results of discover()
+        targets (list, optional): Targets to include for publish session.
+
+    Yields:
+        dict: A dictionary that contains all the result information of a
+            processed plugin.
+
+    Usage:
+        >> context = plugin.Context()
+        >> util.collect(context)
+        >> for result in util.validate_iter(context):
+               print result
+    """
+    for result in _convenience_iter(
+            context, plugins, targets, orders=[api.ValidatorOrder]):
+        yield result
 
 
 def extract_iter(context=None, plugins=None, targets=None):
-    for result in _convenience_iter(context, plugins, targets,
-                                    order=api.ExtractorOrder):
-        yield result
+    """ Convenience iterator for extraction-only
 
-    api.emit("extracted", context=context)
+    This function will process only the extractor plug-ins.
+
+    Arguments:
+        context (Context, optional): Context, defaults to
+            creating a new context
+        plugins (list, optional): Plug-ins to include,
+            defaults to results of discover()
+        targets (list, optional): Targets to include for publish session.
+
+    Yields:
+        dict: A dictionary that contains all the result information of a
+            processed plugin.
+
+    Usage:
+        >> context = plugin.Context()
+        >> util.collect(context)
+        >> util.validate(context)
+        >> for result in util.extract_iter(context):
+               print result
+    """
+    for result in _convenience_iter(
+            context, plugins, targets, orders=[api.ExtractorOrder]
+    ):
+        yield result
 
 
 def integrate_iter(context=None, plugins=None, targets=None):
-    for result in _convenience_iter(context, plugins, targets,
-                                    order=api.IntegratorOrder):
+    """ Convenience iterator for integration-only
+
+    This function will process only the integrator plug-ins.
+
+    Arguments:
+        context (Context, optional): Context, defaults to
+            creating a new context
+        plugins (list, optional): Plug-ins to include,
+            defaults to results of discover()
+        targets (list, optional): Targets to include for publish session.
+
+    Yields:
+        dict: A dictionary that contains all the result information of a
+            processed plugin.
+
+    Usage:
+        >> context = plugin.Context()
+        >> util.collect(context)
+        >> util.validate(context)
+        >> util.extract(context)
+        >> for result in util.integrate_iter(context):
+               print result
+    """
+    for result in _convenience_iter(
+            context, plugins, targets, orders=[api.IntegratorOrder]
+    ):
         yield result
 
-    api.emit("integrated", context=context)
 
-
-def _convenience(context=None, plugins=None, targets=None, order=None):
+def _convenience(context=None, plugins=None, targets=None, orders=None):
     context = context if context is not None else api.Context()
 
-    for result in _convenience_iter(context, plugins, targets, order):
+    for _ in _convenience_iter(context, plugins, targets, orders):
         pass
 
     return context

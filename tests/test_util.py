@@ -32,7 +32,7 @@ def test_convenience_plugins_argument():
     assert count["#"] == 0
 
     api.register_plugin(PluginA)
-    util._convenience(plugins=[PluginB], order=0.5)
+    util._convenience(plugins=[PluginB], orders=[api.CollectorOrder])
 
     assert count["#"] == 10, count
 

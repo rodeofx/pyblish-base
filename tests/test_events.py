@@ -23,6 +23,26 @@ def test_published_event():
 
 
 @with_setup(lib.setup_empty)
+def test_collected_event():
+    """collected is emitted upon finished collection"""
+
+    count = {"#": 0}
+
+    def on_collected(context):
+        assert isinstance(context, pyblish.api.Context)
+        count["#"] += 1
+
+    pyblish.api.register_callback("collected", on_collected)
+    pyblish.util.collect()
+
+    assert count["#"] == 1, count
+
+    pyblish.util.publish()
+
+    assert count["#"] == 2, count
+
+
+@with_setup(lib.setup_empty)
 def test_validated_event():
     """validated is emitted upon finished validation"""
 
@@ -36,6 +56,51 @@ def test_validated_event():
     pyblish.util.validate()
 
     assert count["#"] == 1, count
+
+    pyblish.util.publish()
+
+    assert count["#"] == 2, count
+
+
+@with_setup(lib.setup_empty)
+def test_extracted_event():
+    """extracted is emitted upon finished extraction"""
+
+    count = {"#": 0}
+
+    def on_extracted(context):
+        assert isinstance(context, pyblish.api.Context)
+        count["#"] += 1
+
+    pyblish.api.register_callback("extracted", on_extracted)
+    pyblish.util.extract()
+
+    assert count["#"] == 1, count
+
+    pyblish.util.publish()
+
+    assert count["#"] == 2, count
+
+
+@with_setup(lib.setup_empty)
+def test_integrated_event():
+    """integrated is emitted upon finished integration"""
+
+    count = {"#": 0}
+
+    def on_integrated(context):
+        assert isinstance(context, pyblish.api.Context)
+        count["#"] += 1
+
+    pyblish.api.register_callback("integrated", on_integrated)
+    pyblish.util.integrate()
+
+    assert count["#"] == 1, count
+
+    pyblish.util.publish()
+
+    assert count["#"] == 2, count
+
 
 @with_setup(lib.setup_empty)
 def test_plugin_processed_event():
