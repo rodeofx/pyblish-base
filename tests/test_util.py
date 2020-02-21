@@ -32,9 +32,70 @@ def test_convenience_plugins_argument():
     assert count["#"] == 0
 
     api.register_plugin(PluginA)
-    util._convenience(plugins=[PluginB], orders=[api.CollectorOrder])
+    util._convenience(plugins=[PluginB])
 
     assert count["#"] == 10, count
+
+
+def test_convenience_order_arguments():
+    """util._convenience() ordermin and ordermax arguments work
+    """
+
+    count = {"#": 0}
+
+    class PluginA(api.ContextPlugin):
+        order = api.CollectorOrder
+
+        def process(self, context):
+            count["#"] += 1
+
+    class PluginB(api.ContextPlugin):
+        order = api.ValidatorOrder
+
+        def process(self, context):
+            count["#"] += 10
+
+    class PluginC(api.ContextPlugin):
+        order = api.ExtractorOrder
+
+        def process(self, context):
+            count["#"] += 100
+
+    assert count["#"] == 0
+
+    api.register_plugin(PluginA)
+    api.register_plugin(PluginB)
+    api.register_plugin(PluginC)
+
+    util._convenience(
+        plugins=[PluginA, PluginB, PluginC],
+        ordermin=api.CollectorOrder,
+        ordermax=api.CollectorOrder,
+    )
+
+    assert count["#"] == 1, count
+
+    util._convenience(
+        plugins=[PluginA, PluginB, PluginC],
+        ordermin=api.CollectorOrder,
+        ordermax=api.ValidatorOrder,
+    )
+
+    assert count["#"] == 12, count
+
+    util._convenience(
+        plugins=[PluginA, PluginB, PluginC],
+        ordermax=api.CollectorOrder,
+    )
+
+    assert count["#"] == 13, count
+
+    util._convenience(
+        plugins=[PluginA, PluginB, PluginC],
+        ordermin=api.CollectorOrder,
+    )
+
+    assert count["#"] == 124, count
 
 
 @with_setup(lib.setup, lib.teardown)

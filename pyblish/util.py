@@ -27,7 +27,9 @@ __all__ = [
 ]
 
 
-def publish(context=None, plugins=None, targets=None, orders=None):
+def publish(
+        context=None, plugins=None, targets=None, ordermin=None, ordermax=None
+):
     """Publish everything
 
     This function will process all available plugins of the
@@ -40,7 +42,8 @@ def publish(context=None, plugins=None, targets=None, orders=None):
         plugins (list, optional): Plug-ins to include,
             defaults to results of discover()
         targets (list, optional): Targets to include for publish session.
-        orders (list, optional): Orders to process (e.g. [CollectorOrder]).
+        ordermin (float, optional): The minimum base order to process.
+        ordermax (float, optional): The maximum base order to process.
 
     Returns:
         Context: The context processed by the plugins.
@@ -54,13 +57,15 @@ def publish(context=None, plugins=None, targets=None, orders=None):
 
     context = context if context is not None else api.Context()
 
-    for _ in publish_iter(context, plugins, targets, orders):
+    for _ in publish_iter(context, plugins, targets, ordermin, ordermax):
         pass
 
     return context
 
 
-def publish_iter(context=None, plugins=None, targets=None, orders=None):
+def publish_iter(
+        context=None, plugins=None, targets=None, ordermin=None, ordermax=None
+):
     """Publish iterator
 
     This function will process all available plugins of the
@@ -73,7 +78,8 @@ def publish_iter(context=None, plugins=None, targets=None, orders=None):
         plugins (list, optional): Plug-ins to include,
             defaults to results of discover()
         targets (list, optional): Targets to include for publish session.
-        orders (list, optional): Orders to process (e.g. [CollectorOrder]).
+        ordermin (float, optional): The minimum base order to process.
+        ordermax (float, optional): The maximum base order to process.
 
     Yields:
         dict: A dictionary that contains all the result information of a
@@ -87,13 +93,17 @@ def publish_iter(context=None, plugins=None, targets=None, orders=None):
                print result
 
     """
-    for result in _convenience_iter(context, plugins, targets, orders):
+    for result in _convenience_iter(
+            context, plugins, targets, ordermin, ordermax
+    ):
         yield result
 
     api.emit("published", context=context)
 
 
-def _convenience_iter(context=None, plugins=None, targets=None, orders=None):
+def _convenience_iter(
+        context=None, plugins=None, targets=None, ordermin=None, ordermax=None
+):
     targets = targets or ["default"]
     registered_targets = api.registered_targets()
 
@@ -114,12 +124,10 @@ def _convenience_iter(context=None, plugins=None, targets=None, orders=None):
     # Do not consider inactive plug-ins
     plugins = list(plug for plug in plugins if plug.active)
 
-    # Do not consider plug-ins that are not in any of the given orders
-    if orders:
-        plugins = list(
-            plug for plug in plugins
-            if any(lib.inrange(plug.order, order) for order in orders)
-        )
+    # Do not consider plug-ins that are not within the given order range
+    plugins = list(
+        plug for plug in plugins if _inrange(plug.order, ordermin, ordermax)
+    )
 
     # Keep track of the progress using the same dictionary instance
     progress = {
@@ -138,48 +146,48 @@ def _convenience_iter(context=None, plugins=None, targets=None, orders=None):
         yield result
 
     # Process collectors
-    collectors = list(
-        plug for plug in plugins
-        if lib.inrange(plug.order, api.CollectorOrder)
-    )
+    if _inrange(api.CollectorOrder, ordermin, ordermax):
+        collectors = list(
+            plug for plug in plugins
+            if lib.inrange(plug.order, api.CollectorOrder)
+        )
 
-    if not orders or api.CollectorOrder in orders:
         for result in _process_plugins(context, collectors, state, progress):
             yield result
 
         api.emit("collected", context=context)
 
     # Process validators
-    validators = list(
-        plug for plug in plugins
-        if lib.inrange(plug.order, api.ValidatorOrder)
-    )
+    if _inrange(api.ValidatorOrder, ordermin, ordermax):
+        validators = list(
+            plug for plug in plugins
+            if lib.inrange(plug.order, api.ValidatorOrder)
+        )
 
-    if not orders or api.ValidatorOrder in orders:
         for result in _process_plugins(context, validators, state, progress):
             yield result
 
         api.emit("validated", context=context)
 
     # Process extractors
-    extractors = list(
-        plug for plug in plugins
-        if lib.inrange(plug.order, api.ExtractorOrder)
-    )
+    if _inrange(api.ExtractorOrder, ordermin, ordermax):
+        extractors = list(
+            plug for plug in plugins
+            if lib.inrange(plug.order, api.ExtractorOrder)
+        )
 
-    if not orders or api.ExtractorOrder in orders:
         for result in _process_plugins(context, extractors, state, progress):
             yield result
 
         api.emit("extracted", context=context)
 
     # Process integrators
-    integrators = list(
-        plug for plug in plugins
-        if lib.inrange(plug.order, api.IntegratorOrder)
-    )
+    if _inrange(api.IntegratorOrder, ordermin, ordermax):
+        integrators = list(
+            plug for plug in plugins
+            if lib.inrange(plug.order, api.IntegratorOrder)
+        )
 
-    if not orders or api.IntegratorOrder in orders:
         for result in _process_plugins(context, integrators, state, progress):
             yield result
 
@@ -199,6 +207,14 @@ def _convenience_iter(context=None, plugins=None, targets=None, orders=None):
     for target in targets:
         if target not in registered_targets:
             api.deregister_target(target)
+
+
+def _inrange(number, basemin=None, basemax=None, offset=0.5):
+    if basemin is not None and number < basemin - offset:
+        return False
+    if basemax is not None and number >= basemax + offset:
+        return False
+    return True
 
 
 def _process_plugins(context, plugins, state, progress):
@@ -321,7 +337,8 @@ def collect_iter(context=None, plugins=None, targets=None):
                print result
     """
     for result in _convenience_iter(
-            context, plugins, targets, orders=[api.CollectorOrder]
+            context, plugins, targets,
+            ordermin=api.CollectorOrder, ordermax=api.CollectorOrder
     ):
         yield result
 
@@ -349,7 +366,9 @@ def validate_iter(context=None, plugins=None, targets=None):
                print result
     """
     for result in _convenience_iter(
-            context, plugins, targets, orders=[api.ValidatorOrder]):
+            context, plugins, targets,
+            ordermin=api.ValidatorOrder, ordermax=api.ValidatorOrder
+    ):
         yield result
 
 
@@ -377,7 +396,8 @@ def extract_iter(context=None, plugins=None, targets=None):
                print result
     """
     for result in _convenience_iter(
-            context, plugins, targets, orders=[api.ExtractorOrder]
+            context, plugins, targets,
+            ordermin=api.ExtractorOrder, ordermax=api.ExtractorOrder
     ):
         yield result
 
@@ -407,15 +427,18 @@ def integrate_iter(context=None, plugins=None, targets=None):
                print result
     """
     for result in _convenience_iter(
-            context, plugins, targets, orders=[api.IntegratorOrder]
+            context, plugins, targets,
+            ordermin=api.IntegratorOrder, ordermax=api.IntegratorOrder
     ):
         yield result
 
 
-def _convenience(context=None, plugins=None, targets=None, orders=None):
+def _convenience(
+        context=None, plugins=None, targets=None, ordermin=None, ordermax=None
+):
     context = context if context is not None else api.Context()
 
-    for _ in _convenience_iter(context, plugins, targets, orders):
+    for _ in _convenience_iter(context, plugins, targets, ordermin, ordermax):
         pass
 
     return context
