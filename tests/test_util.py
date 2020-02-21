@@ -136,7 +136,7 @@ def test_convenience_functions():
             count["#"] += 10000
 
     class NotCVEI(api.ContextPlugin):
-        """This plug-in is too far away from Integration to qualify as CVEI"""
+        """This plug-in should be part of integration despite high order"""
         order = api.IntegratorOrder + 2.0
 
         def process(self, instance):
@@ -166,7 +166,7 @@ def test_convenience_functions():
 
     util.integrate(context)
 
-    assert count["#"] == 11111
+    assert count["#"] == 111111
 
 
 @with_setup(lib.setup, lib.teardown)
