@@ -135,21 +135,11 @@ def _convenience_iter(
         "total": len(plugins)
     }
 
-    # Process pre-collectors
-    precollectors = list(
-        plug for plug in plugins
-        if plug.order < api.CollectorOrder
-        and not lib.inrange(plug.order, api.CollectorOrder)
-    )
-
-    for result in _process_plugins(context, precollectors, state, progress):
-        yield result
-
     # Process collectors
     if _inrange(api.CollectorOrder, ordermin, ordermax):
         collectors = list(
             plug for plug in plugins
-            if lib.inrange(plug.order, api.CollectorOrder)
+            if _inrange(plug.order, basemax=api.CollectorOrder)
         )
 
         for result in _process_plugins(context, collectors, state, progress):
@@ -161,7 +151,7 @@ def _convenience_iter(
     if _inrange(api.ValidatorOrder, ordermin, ordermax):
         validators = list(
             plug for plug in plugins
-            if lib.inrange(plug.order, api.ValidatorOrder)
+            if _inrange(plug.order, api.ValidatorOrder, api.ValidatorOrder)
         )
 
         for result in _process_plugins(context, validators, state, progress):
@@ -173,7 +163,7 @@ def _convenience_iter(
     if _inrange(api.ExtractorOrder, ordermin, ordermax):
         extractors = list(
             plug for plug in plugins
-            if lib.inrange(plug.order, api.ExtractorOrder)
+            if _inrange(plug.order, api.ExtractorOrder, api.ExtractorOrder)
         )
 
         for result in _process_plugins(context, extractors, state, progress):
@@ -185,23 +175,13 @@ def _convenience_iter(
     if _inrange(api.IntegratorOrder, ordermin, ordermax):
         integrators = list(
             plug for plug in plugins
-            if lib.inrange(plug.order, api.IntegratorOrder)
+            if _inrange(plug.order, basemin=api.IntegratorOrder)
         )
 
         for result in _process_plugins(context, integrators, state, progress):
             yield result
 
         api.emit("integrated", context=context)
-
-    # Process post-integrators
-    postintegrators = list(
-        plug for plug in plugins
-        if plug.order > api.IntegratorOrder
-        and not lib.inrange(plug.order, api.IntegratorOrder)
-    )
-
-    for result in _process_plugins(context, postintegrators, state, progress):
-        yield result
 
     # Deregister targets
     for target in targets:
@@ -337,8 +317,7 @@ def collect_iter(context=None, plugins=None, targets=None):
                print result
     """
     for result in _convenience_iter(
-            context, plugins, targets,
-            ordermin=api.CollectorOrder, ordermax=api.CollectorOrder
+            context, plugins, targets, ordermax=api.CollectorOrder
     ):
         yield result
 
@@ -427,8 +406,7 @@ def integrate_iter(context=None, plugins=None, targets=None):
                print result
     """
     for result in _convenience_iter(
-            context, plugins, targets,
-            ordermin=api.IntegratorOrder, ordermax=api.IntegratorOrder
+            context, plugins, targets, ordermin=api.IntegratorOrder
     ):
         yield result
 
